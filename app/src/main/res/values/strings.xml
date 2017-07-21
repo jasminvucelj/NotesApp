@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">Notes App</string>
+    <string name="start_tracking">Start tracking</string>
+    <string name="stop_tracking">Stop tracking</string>
+    <string name="start_day">Start day</string>
+    <string name="stop_day">Stop day</string>
+    <string name="note">Note:</string>
+    <string name="last_note">Last note:</string>
+    <string name="send_note">Send note</string>
+    <string name="note_text_hint">"(note text)"</string>
+    <string name="distance">Distance:</string>
+    <string name="current_distance">Current distance:</string>
+    <string name="google_android_map_api_key">AIzaSyATBBjKMBvzfmH3u0AfMPl_m0dXJ0x0oqk</string>
+    <string name="location_bad">Accurate location not available</string>
+    <string name="not_enough_locations">Current distance not available yet.</string>
+    <string name="location_rejected">Location rejected: </string>
+</resources>
