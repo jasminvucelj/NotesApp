@@ -12,8 +12,8 @@ public class LocationOutlierFinder {
     private static final int LONGITUDE_INDEX = 1;
     private static final double IQR_COEF = 1.5;
 
-    private static ArrayList<Double> latitudeList;
-    private static ArrayList<Double> longitudeList;
+    private static List<Double> latitudeList;
+    private static List<Double> longitudeList;
 
 
     /**
