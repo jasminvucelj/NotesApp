@@ -38,11 +38,15 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
     final int LONG_REFRESH_TIME = 5 * 60 * 1000; // 5 min => ms
     final int SHORT_REFRESH_TIME = 6 * 1000; // 15 s => ms
     final int REFRESH_DISTANCE = 100;
-    final int OUTLIER_LOCATION_BUFFER_SIZE = 6; // 10
+    final int OUTLIER_BUFFER_SIZE = 10; //
+    final int INITIAL_LOCATION_COUNT = OUTLIER_BUFFER_SIZE - 1;
     final int TIMER_INTERVAL = 5 * 1000;
     final float ZOOM_LEVEL = 9;
     final float ACCURACY_THRESHOLD = 100;
+    final double DISTANCE_THRESHOLD = 100 * SHORT_REFRESH_TIME / 1000; // m
 
+
+    int constantLocationCount;
     static long nextUpdateTime;
     double currentDistance = 0;
 
@@ -59,24 +63,15 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
 
     boolean dayStarted = false;
 
-    List<Location> constantLocationBuffer = new ArrayList<>();
+    PseudoCluster pseudoCluster;
+
+    List<Location> constantLocationBuffer = new ArrayList<>(); // init??????????????????????????????
 
     Location lastLocationPeriodic = null, lastLocationConstant = null;
     LocationManager locationManagerConstant;
     LocationManager locationManagerPeriodic;
     LocationListener locationListenerConstant;
     LocationListener locationListenerPeriodic;
-
-
-/*    static class TimeChangedReceiver extends BroadcastReceiver {
-
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            if (Calendar.getInstance().getTimeInMillis() > nextUpdateTime) { // time changed => request update
-                requestGPSUpdatePeriodic(locationManagerPeriodic, locationListenerPeriodic);
-            }
-        }
-    }*/
 
 
     @Override
@@ -258,7 +253,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
      * @param location last received periodic location.
      */
     private void periodicLocationChanged(Location location) {
-        if (location.getAccuracy() < ACCURACY_THRESHOLD) {
+        if (locationIsAcceptable(location)){
             btnSendNote.setEnabled(true);
             lastLocationPeriodic = location;
             nextUpdateTime = Calendar.getInstance().getTimeInMillis() + LONG_REFRESH_TIME;
@@ -277,52 +272,74 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
 
     /**
      * Updates total distance based on locations received through constant tracking.
-     * Uses an IQR method-based algorithm to detect and remove outlier ("false") locations.
+     * Uses a "pseudo-cluster" algorithm and an IQR method-based algorithm to detect and remove
+     * outlier ("false") locations.
      * @param location last received constant location.
      */
     private void constantLocationChanged(Location location) {
-        // add new location to buffer
-        constantLocationBuffer.add(location);
+        // no need to count all locations, only to know if enough have been received yet or not
+        if (constantLocationCount < INITIAL_LOCATION_COUNT + 1) constantLocationCount++;
 
-        //Toast.makeText(this, String.valueOf(constantLocationBuffer.size()), Toast.LENGTH_SHORT).show();
+        // Toast.makeText(this, String.valueOf(constantLocationCount), Toast.LENGTH_SHORT).show();
 
-        if (constantLocationBuffer.size() >= OUTLIER_LOCATION_BUFFER_SIZE) {
-            // remove outlier points from buffer
-            constantLocationBuffer = LocationOutlierFinder.removeOutliers(constantLocationBuffer);
-
-            if(constantLocationBuffer.size() > 0 && constantLocationBuffer.contains(location)) {
-                // update distance
-                if (currentDistance == 0) {
-                    // distance of the entire list
-                    currentDistance = locationListDistance(constantLocationBuffer);
-                } else {
-                    // distance from last saved location to the current one
-                    currentDistance += locationDistance(lastLocationConstant, location);
-                }
-
-                // make room in the buffer - remove oldest location
-                constantLocationBuffer.remove(0);
-
-                textViewDistance.setText(getString(R.string.distance) +
-                        "\t" +
-                        String.format(Locale.getDefault(), "%.2f", currentDistance) +
-                        " m");
-
-                // update last saved location
-                lastLocationConstant = location;
-
-            }
-            else {
-                Toast.makeText(this,
-                        "Location rejected: " +
-                                location.getLatitude() +
-                                ", " +
-                                location.getLongitude(),
-                        Toast.LENGTH_SHORT).show();
-            }
-        }
-        else if (currentDistance == 0) {
+        // not enough locations yet - add new location to pseudo-cluster
+        if (constantLocationCount < INITIAL_LOCATION_COUNT) {
+            pseudoCluster.add(location);
             textViewDistance.setText(getString(R.string.not_enough_locations));
+        }
+
+        // enough locations - get largest pseudo-cluster and use it for the IQR method algorithm
+        // in the future
+        else if (constantLocationCount == INITIAL_LOCATION_COUNT) {
+            pseudoCluster.add(location);
+            constantLocationBuffer = pseudoCluster.getLargestCluster().getLocations();
+            textViewDistance.setText(getString(R.string.not_enough_locations));
+        }
+
+        // more locations - the pseudo-cluster has already been used - use the IQR method algorithm
+        else {
+            // add new location to buffer
+            constantLocationBuffer.add(location);
+
+            if (constantLocationBuffer.size() >= OUTLIER_BUFFER_SIZE) {
+                // remove outlier points from buffer
+                constantLocationBuffer = IQROutlierFinder.removeOutliers(constantLocationBuffer);
+
+                if (constantLocationBuffer.size() > 0 && constantLocationBuffer.contains(location)) {
+                    // update distance
+                    if (currentDistance == 0) {
+                        // distance of the entire list
+                        currentDistance = locationListDistance(constantLocationBuffer);
+                    } else {
+                        // distance from last saved location to the current one
+                        currentDistance += locationDistance(lastLocationConstant, location);
+                    }
+
+                    // make room in the buffer - remove oldest location
+                    constantLocationBuffer.remove(0);
+
+                    textViewDistance.setText(getString(R.string.distance) +
+                            "\t" +
+                            String.format(Locale.getDefault(), "%.2f", currentDistance) +
+                            " m");
+
+                    // update last saved location
+                    lastLocationConstant = location;
+
+                } else {
+                    // location is an outlier - rejected
+                    Toast.makeText(this,
+                            "Location rejected: " +
+                                    location.getLatitude() +
+                                    ", " +
+                                    location.getLongitude(),
+                            Toast.LENGTH_SHORT).show();
+                }
+            } else if (currentDistance == 0) {
+                textViewDistance.setText(getString(R.string.not_enough_locations));
+            }
+
+
         }
     }
 
@@ -424,6 +441,10 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
             btnStartDay.setText(getString(R.string.stop_day));
 
             currentDistance = 0;
+
+            constantLocationCount = 0;
+            pseudoCluster = new PseudoCluster(DISTANCE_THRESHOLD);
+
             constantLocationBuffer = new ArrayList<>();
 
             requestGPSUpdatePeriodic(locationManagerPeriodic, locationListenerPeriodic);

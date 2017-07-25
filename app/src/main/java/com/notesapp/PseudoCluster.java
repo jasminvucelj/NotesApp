@@ -6,10 +6,9 @@ import android.location.Location;
 import java.util.ArrayList;
 import java.util.List;
 
+
 public class PseudoCluster {
-    private List<ArrayList<Location>> clusterList;
-    private List<Double> latitudeMeans;
-    private List<Double> longitudeMeans;
+    private List<PseudoClusterElement> clusterList;
 
     double distanceThreshold;
 
@@ -17,11 +16,13 @@ public class PseudoCluster {
     PseudoCluster(double distanceThreshold) {
         this.distanceThreshold = distanceThreshold;
         clusterList = new ArrayList<>();
-        latitudeMeans = new ArrayList<>();
-        longitudeMeans = new ArrayList<>();
     }
 
 
+    /**
+     * Counts the total number of elements across all clusters.
+     * @return the number of elements.
+     */
     int getTotalElementCount() {
         int size = clusterList.size();
         if (size == 0) {
@@ -29,7 +30,7 @@ public class PseudoCluster {
         }
         else {
             int sum = 0;
-            for (ArrayList<Location> cluster : clusterList) {
+            for (PseudoClusterElement cluster : clusterList) {
                 sum += cluster.size();
             }
             return sum;
@@ -37,29 +38,29 @@ public class PseudoCluster {
     }
 
 
+    /**
+     * Adds a location to the cluster list, into the best fitting cluster.
+     * @param location the Location to be added to a cluster.
+     */
     void add(Location location) {
         int clusterCount = clusterList.size();
+
         // first location - create first cluster and add the location to it
         if(clusterCount == 0) {
             addCluster(location);
         }
 
         else {
-            double newLat = location.getLatitude();
-            double newLon = location.getLongitude();
 
             // try to place the location in an existing cluster
             for(int i = 0; i < clusterCount; i++) {
                 // if distance to the mean of i-th cluster < threshold -> place the location
                 // in that cluster
-                if(euclideanDistance(latitudeMeans.get(i), longitudeMeans.get(i), newLat, newLon)
-                        < distanceThreshold) {
-                    clusterList.get(i).add(location); // ???
-                    latitudeMeans.set(i, (latitudeMeans.get(i)+location.getLatitude()) / 2.0);
-                    longitudeMeans.set(i, (longitudeMeans.get(i)+location.getLongitude()) / 2.0);
+                if(location.distanceTo(clusterList.get(i).getMeanLocation()) < distanceThreshold) {
+                    clusterList.get(i).add(location);
                     return;
-
                 }
+
             }
 
             // if not placed -> requires a new cluster
@@ -70,23 +71,21 @@ public class PseudoCluster {
     }
 
 
+    /**
+     * Adds a new cluster (with the specified location) into the cluster list.
+     * @param location the Location with which the new cluster is to be initialized.
+     */
     private void addCluster(Location location) {
-        ArrayList<Location> tempList = new ArrayList<>();;
-        tempList.add(location);
-        clusterList.add(tempList);
-
-        latitudeMeans.add(location.getLatitude());
-        longitudeMeans.add(location.getLongitude());
+        PseudoClusterElement element = new PseudoClusterElement(location);
+        clusterList.add(element);
     }
 
 
-    // TODO location distance
-    private double euclideanDistance(double lat1, double lon1, double lat2, double lon2) {
-        return Math.sqrt(Math.pow(lat2 - lat1, 2) + Math.pow(lon2 - lon1, 2));
-    }
-
-
-    List<Location> getLargestCluster() {
+    /**
+     * Finds the cluster with the largest number of elements.
+     * @return the largest cluster.
+     */
+    PseudoClusterElement getLargestCluster() {
         int size = clusterList.size();
         if (size == 0) {
             return null;

@@ -7,7 +7,7 @@ import java.util.Collections;
 import java.util.List;
 
 
-public class LocationOutlierFinder {
+public class IQROutlierFinder {
     private static final int LATITUDE_INDEX = 0;
     private static final int LONGITUDE_INDEX = 1;
     private static final double IQR_COEF = 1.5;
