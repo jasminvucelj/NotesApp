@@ -10,7 +10,7 @@ import java.util.List;
 public class PseudoCluster {
     private List<PseudoClusterElement> clusterList;
 
-    double distanceThreshold;
+    private double distanceThreshold;
 
 
     PseudoCluster(double distanceThreshold) {

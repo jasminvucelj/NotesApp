@@ -36,12 +36,12 @@ import com.google.android.gms.maps.model.MarkerOptions;
 public class MainActivity extends Activity implements OnMapReadyCallback {
 
     final int LONG_REFRESH_TIME = 5 * 60 * 1000; // 5 min => ms
-    final int SHORT_REFRESH_TIME = 6 * 1000; // 15 s => ms
+    final int SHORT_REFRESH_TIME = 15 * 1000; // 15 s => ms
     final int REFRESH_DISTANCE = 100;
     final int OUTLIER_BUFFER_SIZE = 10; //
     final int INITIAL_LOCATION_COUNT = OUTLIER_BUFFER_SIZE - 1;
     final int TIMER_INTERVAL = 5 * 1000;
-    final float ZOOM_LEVEL = 9;
+    final float ZOOM_LEVEL = 10;
     final float ACCURACY_THRESHOLD = 100;
     final double DISTANCE_THRESHOLD = 100 * SHORT_REFRESH_TIME / 1000; // m
 
@@ -260,9 +260,13 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
             countDownTimer.start();
 
             Toast.makeText(this, "Received location: " +
-                            location.getLatitude() +
+                            String.format(Locale.getDefault(),
+                                    "%7.5f",
+                                    location.getLatitude()) +
                             ", " +
-                            location.getLongitude(),
+                            String.format(Locale.getDefault(),
+                                    "%7.5f",
+                                    location.getLongitude()),
                     Toast.LENGTH_SHORT).show();
         } else {
             requestGPSUpdatePeriodic(locationManagerPeriodic, locationListenerPeriodic);
@@ -272,13 +276,16 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
 
     /**
      * Updates total distance based on locations received through constant tracking.
-     * Uses a "pseudo-cluster" algorithm and an IQR method-based algorithm to detect and remove
-     * outlier ("false") locations.
+     * Uses a "pseudo-cluster" algorithm (for initial locations) and an IQR method-based algorithm
+     * (for later points) to detect and remove outlier ("false") locations.
      * @param location last received constant location.
      */
     private void constantLocationChanged(Location location) {
         // no need to count all locations, only to know if enough have been received yet or not
-        if (constantLocationCount < INITIAL_LOCATION_COUNT + 1) constantLocationCount++;
+        if (constantLocationCount < INITIAL_LOCATION_COUNT + 1) {
+            constantLocationCount++;
+            // Toast.makeText(this, String.valueOf(constantLocationCount), Toast.LENGTH_SHORT).show();
+        }
 
         // Toast.makeText(this, String.valueOf(constantLocationCount), Toast.LENGTH_SHORT).show();
 
@@ -286,6 +293,17 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
         if (constantLocationCount < INITIAL_LOCATION_COUNT) {
             pseudoCluster.add(location);
             textViewDistance.setText(getString(R.string.not_enough_locations));
+
+            Toast.makeText(this,
+                    "current mean = " +
+                            String.format(Locale.getDefault(),
+                                    "%7.5f",
+                                    pseudoCluster.getLargestCluster().getMeanLocation().getLatitude()) +
+                            " " +
+                            String.format(Locale.getDefault(),
+                                    "%7.5f",
+                                    pseudoCluster.getLargestCluster().getMeanLocation().getLongitude())
+                    , Toast.LENGTH_SHORT).show();
         }
 
         // enough locations - get largest pseudo-cluster and use it for the IQR method algorithm
@@ -294,6 +312,17 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
             pseudoCluster.add(location);
             constantLocationBuffer = pseudoCluster.getLargestCluster().getLocations();
             textViewDistance.setText(getString(R.string.not_enough_locations));
+
+            Toast.makeText(this,
+                    "current mean = " +
+                            String.format(Locale.getDefault(),
+                                    "%7.5f",
+                                    pseudoCluster.getLargestCluster().getMeanLocation().getLatitude()) +
+                            " " +
+                            String.format(Locale.getDefault(),
+                                    "%7.5f",
+                                    pseudoCluster.getLargestCluster().getMeanLocation().getLongitude())
+                    , Toast.LENGTH_SHORT).show();
         }
 
         // more locations - the pseudo-cluster has already been used - use the IQR method algorithm
