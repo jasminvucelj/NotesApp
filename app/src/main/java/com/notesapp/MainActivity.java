@@ -2,7 +2,11 @@ package com.notesapp;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 
 import java.util.ArrayList;
@@ -18,13 +22,20 @@ import android.os.Bundle;
 import android.os.CountDownTimer;
 import android.provider.Settings;
 import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
 import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.LocalBroadcastManager;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.location.ActivityRecognition;
+import com.google.android.gms.location.DetectedActivity;
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.MapFragment;
@@ -33,7 +44,9 @@ import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.MarkerOptions;
 
 
-public class MainActivity extends Activity implements OnMapReadyCallback {
+public class MainActivity extends Activity implements OnMapReadyCallback,
+        GoogleApiClient.ConnectionCallbacks,
+        GoogleApiClient.OnConnectionFailedListener {
 
     final int LONG_REFRESH_TIME = 5 * 60 * 1000; // 5 min => ms
     final int SHORT_REFRESH_TIME = 15 * 1000; // 15 s => ms
@@ -41,6 +54,8 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
     final int OUTLIER_BUFFER_SIZE = 10; //
     final int INITIAL_LOCATION_COUNT = OUTLIER_BUFFER_SIZE - 1;
     final int TIMER_INTERVAL = 5 * 1000;
+    final int ACTIVITY_REFRESH_TIME = 5 * 1000;
+    final int CONFIDENCE_THRESHOLD = 75;
     final float ZOOM_LEVEL = 10;
     final float ACCURACY_THRESHOLD = 100;
     final double DISTANCE_THRESHOLD = 100 * SHORT_REFRESH_TIME / 1000; // m
@@ -61,7 +76,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
     EditText noteText;
     TextView textViewDistance, textViewDB;
 
-    boolean dayStarted = false;
+    boolean dayStarted = false, trackingEnabled = false;
 
     PseudoCluster pseudoCluster;
 
@@ -73,6 +88,43 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
     LocationListener locationListenerConstant;
     LocationListener locationListenerPeriodic;
 
+    GoogleApiClient mApiClient;
+
+
+    /**
+     * For receiving user activity updates from {@link ActivityRecognitionService}
+     */
+    private BroadcastReceiver activityReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            int type = intent.getIntExtra("type", DetectedActivity.UNKNOWN);
+            int confidence = intent.getIntExtra("confidence", 0);
+
+            if(confidence >= CONFIDENCE_THRESHOLD){
+                Toast.makeText(MainActivity.this, String.valueOf(type), Toast.LENGTH_SHORT).show();
+
+                if (trackingEnabled &&
+                        type == DetectedActivity.STILL) {
+                    trackingEnabled = false;
+                    locationManagerConstant.removeUpdates(locationListenerConstant);
+                }
+
+                if (!trackingEnabled && (
+                        type == DetectedActivity.IN_VEHICLE ||
+                                type == DetectedActivity.ON_BICYCLE ||
+                                type == DetectedActivity.ON_FOOT ||
+                                type == DetectedActivity.RUNNING ||
+                                type == DetectedActivity.WALKING)) {
+                    trackingEnabled = true;
+                    requestGPSUpdateConstant(locationManagerConstant,
+                            locationListenerConstant,
+                            SHORT_REFRESH_TIME,
+                            REFRESH_DISTANCE);
+                }
+            }
+        }
+    };
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -83,11 +135,16 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
         initMap();
         initViews();
         initDatabaseHandler();
+        initActivityRecognition();
 
 
         // ask permissions
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
-                && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+                && ActivityCompat.checkSelfPermission(
+                        this,
+                Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 requestPermissions(new String[]{Manifest.permission.ACCESS_COARSE_LOCATION,
                                 Manifest.permission.ACCESS_FINE_LOCATION
@@ -105,7 +162,9 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
 
 
     @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode,
+                                           @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
         switch (requestCode){
             case 10:
                 initCountDownTimer();
@@ -115,6 +174,37 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
             default:
                 break;
         }
+    }
+
+
+    @Override
+    public void onMapReady(GoogleMap googleMap) {
+        this.googleMap = googleMap;
+    }
+
+
+    @Override
+    public void onConnected(@Nullable Bundle bundle) {
+        Intent intent = new Intent(this, ActivityRecognitionService.class);
+        PendingIntent pendingIntent = PendingIntent.getService(this,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT);
+        ActivityRecognition.ActivityRecognitionApi.requestActivityUpdates(mApiClient,
+                ACTIVITY_REFRESH_TIME,
+                pendingIntent); // 3s
+    }
+
+
+    @Override
+    public void onConnectionSuspended(int i) {
+
+    }
+
+
+    @Override
+    public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
+
     }
 
 
@@ -146,6 +236,18 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
     private void initDatabaseHandler() {
         dbHandler = new DatabaseHandler(this);
         dbHandler.deleteAll(); // TEST
+    }
+
+
+    private void initActivityRecognition() {
+        LocalBroadcastManager.getInstance(this).registerReceiver(
+                activityReceiver, new IntentFilter("activityRecognitionIntent"));
+
+        mApiClient = new GoogleApiClient.Builder(this)
+                .addApi(ActivityRecognition.API)
+                .addConnectionCallbacks(this)
+                .addOnConnectionFailedListener(this)
+                .build();
     }
 
 
@@ -183,14 +285,10 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
             }
 
             @Override
-            public void onStatusChanged(String provider, int status, Bundle extras) {
-
-            }
+            public void onStatusChanged(String provider, int status, Bundle extras) {}
 
             @Override
-            public void onProviderEnabled(String provider) {
-
-            }
+            public void onProviderEnabled(String provider) {}
 
             @Override
             public void onProviderDisabled(String provider) {
@@ -207,14 +305,10 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
             }
 
             @Override
-            public void onStatusChanged(String provider, int status, Bundle extras) {
-
-            }
+            public void onStatusChanged(String provider, int status, Bundle extras) {}
 
             @Override
-            public void onProviderEnabled(String provider) {
-
-            }
+            public void onProviderEnabled(String provider) {}
 
             @Override
             public void onProviderDisabled(String provider) {
@@ -226,25 +320,34 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
 
     /**
      * Requests a single GPS update.
-     * @param lm location manager
-     * @param ll location listener
+     * @param locationManager location manager
+     * @param locationListener location listener
      */
-    static private void requestGPSUpdatePeriodic(LocationManager lm, LocationListener ll) {
+    static private void requestGPSUpdatePeriodic(LocationManager locationManager,
+                                                 LocationListener locationListener) {
         //noinspection MissingPermission
-        lm.requestSingleUpdate(LocationManager.GPS_PROVIDER, ll, null);
+        locationManager.requestSingleUpdate(LocationManager.GPS_PROVIDER,
+                locationListener, null);
     }
 
 
     /**
      * Requests constant GPS updates with a given refresh time/distance.
-     * @param lm location manager
-     * @param ll location listener
+     * @param locationManager location manager
+     * @param locationListener location listener
      * @param refreshTime min time interval (ms)
      * @param refreshDistance min distance interval (m)
      */
-    static private void requestGPSUpdateConstant(LocationManager lm, LocationListener ll, int refreshTime, int refreshDistance) {
+    static private void requestGPSUpdateConstant(LocationManager locationManager,
+                                                 LocationListener locationListener,
+                                                 int refreshTime,
+                                                 int refreshDistance) {
         //noinspection MissingPermission
-        lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, refreshTime, refreshDistance, ll);
+        locationManager.requestLocationUpdates(
+                LocationManager.GPS_PROVIDER,
+                refreshTime,
+                refreshDistance,
+                locationListener);
     }
 
 
@@ -451,6 +554,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
     private void dayStartedToggle() {
         if (dayStarted) { // turn off
             dayStarted = false;
+            trackingEnabled = false;
 
             btnSendNote.setEnabled(false);
             btnStartDay.setText(getString(R.string.start_day));
@@ -462,10 +566,13 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
 
             locationManagerPeriodic.removeUpdates(locationListenerPeriodic);
             locationManagerConstant.removeUpdates(locationListenerConstant);
+
+            mApiClient.disconnect();
         }
 
         else { // turn on
             dayStarted = true;
+            trackingEnabled = true;
 
             btnStartDay.setText(getString(R.string.stop_day));
 
@@ -476,8 +583,14 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
 
             constantLocationBuffer = new ArrayList<>();
 
-            requestGPSUpdatePeriodic(locationManagerPeriodic, locationListenerPeriodic);
-            requestGPSUpdateConstant(locationManagerConstant, locationListenerConstant, SHORT_REFRESH_TIME, REFRESH_DISTANCE);
+            requestGPSUpdatePeriodic(locationManagerPeriodic,
+                    locationListenerPeriodic);
+            requestGPSUpdateConstant(locationManagerConstant,
+                    locationListenerConstant,
+                    SHORT_REFRESH_TIME,
+                    REFRESH_DISTANCE);
+
+            mApiClient.connect();
         }
     }
 
@@ -532,11 +645,6 @@ public class MainActivity extends Activity implements OnMapReadyCallback {
         googleMap.moveCamera(CameraUpdateFactory.newLatLngZoom(locationAsLatLng, ZOOM_LEVEL));
     }
 
-
-    @Override
-    public void onMapReady(GoogleMap googleMap) {
-        this.googleMap = googleMap;
-    }
 }
 
 
