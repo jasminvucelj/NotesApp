@@ -32,6 +32,20 @@ public class ActivityRecognitionService extends IntentService {
 
 
     private void sendToMainActivity(ActivityRecognitionResult result) {
+        DetectedActivity mostProbableActivity = result.getMostProbableActivity();
+        int type = mostProbableActivity.getType();
+        int confidence = mostProbableActivity.getConfidence();
+
+        Intent intent = new Intent("activityRecognitionIntent");
+        intent.putExtra("type", type);
+        intent.putExtra("confidence", confidence);
+
+        LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
+    }
+
+
+    /*
+    private void sendToMainActivity(ActivityRecognitionResult result) {
         List<DetectedActivity> probableActivities = result.getProbableActivities();
         ArrayList<Integer> typeList = new ArrayList<>();
         ArrayList<Integer> confidenceList = new ArrayList<>();
@@ -55,8 +69,8 @@ public class ActivityRecognitionService extends IntentService {
         intent.putExtra("type", typeList);
         intent.putExtra("confidence", confidenceList);
 
-        Toast.makeText(this, String.valueOf(result.getMostProbableActivity().getType()) + " (" + String.valueOf(result.getMostProbableActivity().getConfidence()) + "%)", Toast.LENGTH_LONG).show();
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
     }
+    */
 
 }

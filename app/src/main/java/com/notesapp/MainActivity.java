@@ -58,11 +58,11 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
     final int INITIAL_LOCATION_COUNT = OUTLIER_BUFFER_SIZE - 1;
     final int TIMER_INTERVAL = 5 * 1000;
     final int ACTIVITY_REFRESH_TIME = 5 * 1000;
+    final int CONFIDENCE_THRESHOLD = 75;
     final float ZOOM_LEVEL = 10;
     final float ACCURACY_THRESHOLD = 100;
     final double DISTANCE_THRESHOLD = 100 * SHORT_REFRESH_TIME / 1000; // m
 
-    static final String LOG_FOLDERNAME = "NotesAppLog";
     static final String LOG_FILENAME = "log.txt";
 
     int constantLocationCount;
@@ -102,6 +102,46 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
      * constant tracking on and off as neccessary.
      */
     private BroadcastReceiver activityReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            ArrayList<Integer> typeList = intent.getIntegerArrayListExtra("type");
+            int type = intent.getIntExtra("type", DetectedActivity.STILL);
+            ArrayList<Integer> confidenceList = intent.getIntegerArrayListExtra("confidence");
+            int confidence = intent.getIntExtra("confidence", 0);
+
+            // if type of activity is STILL & confidence is above threshold, turn off tracking
+            // (as neccessary)
+            if(type == DetectedActivity.STILL && confidence >= CONFIDENCE_THRESHOLD) {
+                if (trackingEnabled) {
+                    trackingEnabled = false;
+                    locationManagerConstant.removeUpdates(locationListenerConstant);
+
+                    if(logging) {
+                        writeLog(getCurrentTime() + ": Tracking = OFF.\n");
+                    }
+                }
+            }
+
+            // else the user is moving (or it is not certain that he isn't), so turn on tracking
+            // (as neccessary)
+            else {
+                if (!trackingEnabled) {
+                    trackingEnabled = true;
+                    requestGPSUpdateConstant(locationManagerConstant,
+                            locationListenerConstant,
+                            SHORT_REFRESH_TIME,
+                            REFRESH_DISTANCE);
+
+                    if(logging) {
+                        writeLog(getCurrentTime() + ": Tracking = ON.\n");
+                    }
+                }
+            }
+        }
+    };
+
+
+    /*private BroadcastReceiver activityReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             ArrayList<Integer> typeList = intent.getIntegerArrayListExtra("type");
@@ -146,7 +186,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                 }
             }
         }
-    };
+    };*/
 
 
     @Override
@@ -370,12 +410,14 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
      * Stops activity recognition updates.
      */
     private void stopActivityUpdates() {
-        Intent intent = new Intent(this, ActivityRecognitionService.class);
-        PendingIntent pendingIntent = PendingIntent.getService(this,
-                0,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT);
-        ActivityRecognition.ActivityRecognitionApi.removeActivityUpdates(mApiClient, pendingIntent);
+        if (mApiClient.isConnected()) {
+            Intent intent = new Intent(this, ActivityRecognitionService.class);
+            PendingIntent pendingIntent = PendingIntent.getService(this,
+                    0,
+                    intent,
+                    PendingIntent.FLAG_UPDATE_CURRENT);
+            ActivityRecognition.ActivityRecognitionApi.removeActivityUpdates(mApiClient, pendingIntent);
+        }
     }
 
 
@@ -423,7 +465,19 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             nextUpdateTime = Calendar.getInstance().getTimeInMillis() + LONG_REFRESH_TIME;
             countDownTimer.start();
 
-            Toast.makeText(this, "periodic location: " +
+            if (logging) {
+                writeLog(getCurrentTime() +
+                        ": " +
+                        "Location [" +
+                        location.getLatitude() +
+                        ", " +
+                        location.getLongitude() +
+                        "] (accuracy =  " +
+                        location.getAccuracy() +
+                        "accepted as new periodic location.\n");
+            }
+
+            /*Toast.makeText(this, "periodic location: " +
                             String.format(Locale.getDefault(),
                                     "%7.5f",
                                     location.getLatitude()) +
@@ -431,9 +485,21 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                             String.format(Locale.getDefault(),
                                     "%7.5f",
                                     location.getLongitude()),
-                    Toast.LENGTH_SHORT).show();
+                    Toast.LENGTH_SHORT).show();*/
         } else {
             requestGPSUpdatePeriodic(locationManagerPeriodic, locationListenerPeriodic);
+
+            if (logging) {
+                writeLog(getCurrentTime() +
+                        ": " +
+                        "Location [" +
+                        location.getLatitude() +
+                        ", " +
+                        location.getLongitude() +
+                        "] (accuracy =  " +
+                        location.getAccuracy() +
+                        "rejected (insufficient accuracy).\n");
+            }
         }
     }
 
@@ -679,6 +745,10 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             locationManagerPeriodic.removeUpdates(locationListenerPeriodic);
             locationManagerConstant.removeUpdates(locationListenerConstant);
 
+            if(logging) {
+                writeLog(getCurrentTime() + ": Tracking = OFF (day stopped).\n");
+            }
+
             mApiClient.disconnect();
         }
 
@@ -701,6 +771,10 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                     locationListenerConstant,
                     SHORT_REFRESH_TIME,
                     REFRESH_DISTANCE);
+
+            if(logging) {
+                writeLog(getCurrentTime() + ": Tracking = ON (day started).\n");
+            }
 
             mApiClient.connect();
         }
@@ -776,12 +850,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
      */
     public static void writeLog(String data) {
         if(isExternalStorageWritable()) {
-            File root = Environment.getExternalStorageDirectory();
-            File dir = new File(root.getAbsolutePath() + "/" + LOG_FOLDERNAME);
-            if(!dir.exists()) {
-                dir.mkdir();
-            }
-            File file = new File(dir, LOG_FILENAME);
+            File file = new File(Environment.getExternalStorageDirectory(), LOG_FILENAME);
 
             if(!file.exists()) {
                 try {
@@ -804,8 +873,6 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
 
     public static String getCurrentTime() {
         Calendar c = Calendar.getInstance();
-        System.out.println("Current time => "+c.getTime());
-
         SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
         return(df.format(c.getTime()));
     }
