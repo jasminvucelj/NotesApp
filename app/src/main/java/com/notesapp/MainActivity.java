@@ -29,6 +29,7 @@ import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.LocalBroadcastManager;
+import android.util.SparseArray;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -52,7 +53,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
         GoogleApiClient.OnConnectionFailedListener {
 
     final int LONG_REFRESH_TIME = 5 * 60 * 1000; // 5 min => ms
-    final int SHORT_REFRESH_TIME = 6 * 1000; // 15 s => ms
+    final int SHORT_REFRESH_TIME = 15 * 1000; // 15 s => ms
     final int REFRESH_DISTANCE = 0; //100
     final int OUTLIER_BUFFER_SIZE = 10; //
     final int INITIAL_LOCATION_COUNT = OUTLIER_BUFFER_SIZE - 1;
@@ -63,13 +64,14 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
     final float ACCURACY_THRESHOLD = 100;
     final double DISTANCE_THRESHOLD = 100 * SHORT_REFRESH_TIME / 1000; // m
 
-    static final String LOG_FILENAME = "log.txt";
+    static final String LOG_FILENAME = "log_";
+    static final String LOG_EXTENSION = ".txt";
 
     int constantLocationCount;
     static long nextUpdateTime;
     double currentDistance = 0;
 
-    DatabaseHandler dbHandler;
+    DatabaseHandler dbHandler = null;
 
     CountDownTimer countDownTimer;
 
@@ -84,7 +86,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
 
     boolean dayStarted = false, trackingEnabled = false, activityReceiverActive = false;
 
-    PseudoCluster pseudoCluster;
+    PseudoClusterList pseudoClusterList;
 
     List<Location> constantLocationBuffer = new ArrayList<>(); // init??????????????????????????????
 
@@ -96,6 +98,9 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
 
     GoogleApiClient mApiClient;
 
+    // for logging
+    SparseArray<String> activityNames;
+
 
     /**
      * For receiving user activity updates from {@link ActivityRecognitionService} and turning
@@ -104,10 +109,20 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
     private BroadcastReceiver activityReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            ArrayList<Integer> typeList = intent.getIntegerArrayListExtra("type");
             int type = intent.getIntExtra("type", DetectedActivity.STILL);
-            ArrayList<Integer> confidenceList = intent.getIntegerArrayListExtra("confidence");
             int confidence = intent.getIntExtra("confidence", 0);
+
+            if(MainActivity.logging) {
+                MainActivity.writeLog(MainActivity.getCurrentDateTime() +
+                        ": " +
+                        "Most probable activity: " +
+                        activityNames.get(type, "") +
+                        " (" +
+                        String.valueOf(type) +
+                        ") (" +
+                        String.valueOf(confidence) +
+                        "%)\n");
+            }
 
             // if type of activity is STILL & confidence is above threshold, turn off tracking
             // (as neccessary)
@@ -117,7 +132,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                     locationManagerConstant.removeUpdates(locationListenerConstant);
 
                     if(logging) {
-                        writeLog(getCurrentTime() + ": Tracking = OFF.\n");
+                        writeLog(getCurrentDateTime() + ": Tracking = OFF.\n");
                     }
                 }
             }
@@ -133,60 +148,12 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                             REFRESH_DISTANCE);
 
                     if(logging) {
-                        writeLog(getCurrentTime() + ": Tracking = ON.\n");
+                        writeLog(getCurrentDateTime() + ": Tracking = ON.\n");
                     }
                 }
             }
         }
     };
-
-
-    /*private BroadcastReceiver activityReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            ArrayList<Integer> typeList = intent.getIntegerArrayListExtra("type");
-            ArrayList<Integer> confidenceList = intent.getIntegerArrayListExtra("confidence");
-
-            // find indices of movement activities
-            int[] movementActivityIndex = new int[5];
-            movementActivityIndex[0] = typeList.indexOf(DetectedActivity.IN_VEHICLE);
-            movementActivityIndex[1] = typeList.indexOf(DetectedActivity.ON_BICYCLE);
-            movementActivityIndex[2] = typeList.indexOf(DetectedActivity.ON_FOOT);
-            movementActivityIndex[3] = typeList.indexOf(DetectedActivity.RUNNING);
-            movementActivityIndex[4] = typeList.indexOf(DetectedActivity.WALKING);
-
-            // find index of STILL activity
-            int stillActivityIndex = typeList.indexOf(DetectedActivity.STILL);
-
-            // if any of the movement activities are more probable than STILL, turn on tracking
-            for (int currentIndex : movementActivityIndex) {
-                if (currentIndex != -1 &&
-                        confidenceList.get(currentIndex) > confidenceList.get(stillActivityIndex)) {
-                    if (!trackingEnabled) {
-                        trackingEnabled = true;
-                        requestGPSUpdateConstant(locationManagerConstant,
-                                locationListenerConstant,
-                                SHORT_REFRESH_TIME,
-                                REFRESH_DISTANCE);
-
-                        if(logging) {
-                            writeLog(getCurrentTime() + ": Tracking = ON.\n");
-                        }
-                    }
-                }
-
-                // most probable activity is STILL - turn off tracking
-                if (trackingEnabled) {
-                    trackingEnabled = false;
-                    locationManagerConstant.removeUpdates(locationListenerConstant);
-
-                    if(logging) {
-                        writeLog(getCurrentTime() + ": Tracking = OFF.\n");
-                    }
-                }
-            }
-        }
-    };*/
 
 
     @Override
@@ -199,20 +166,22 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
         initViews();
         initDatabaseHandler();
         initActivityRecognition();
+        initSparseArray();
 
 
         // ask permissions
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
-                && ActivityCompat.checkSelfPermission(
-                        this,
-                Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED
+                || ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED
+                || ActivityCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 requestPermissions(new String[]{Manifest.permission.ACCESS_COARSE_LOCATION,
-                                Manifest.permission.ACCESS_FINE_LOCATION
-                        }
-                        , 10);
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                        10);
             }
             return;
         }
@@ -304,7 +273,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
      */
     private void initDatabaseHandler() {
         dbHandler = new DatabaseHandler(this);
-        dbHandler.deleteAll(); // TEST
+        dbHandler.deleteAll();
     }
 
 
@@ -317,6 +286,22 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                 .addConnectionCallbacks(this)
                 .addOnConnectionFailedListener(this)
                 .build();
+    }
+
+
+    /**
+     * Initializes the sparse array that maps the activity values to their names.
+     */
+    private void initSparseArray() {
+        activityNames = new SparseArray<>();
+        activityNames.append(0, "IN_VEHICLE");
+        activityNames.append(1, "ON_BICYCLE");
+        activityNames.append(2, "ON_FOOT");
+        activityNames.append(8, "RUNNING");
+        activityNames.append(3, "STILL");
+        activityNames.append(5, "TILTING");
+        activityNames.append(4, "UNKNOWN");
+        activityNames.append(7, "WALKING");
     }
 
 
@@ -466,7 +451,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             countDownTimer.start();
 
             if (logging) {
-                writeLog(getCurrentTime() +
+                writeLog(getCurrentDateTime() +
                         ": " +
                         "Location [" +
                         location.getLatitude() +
@@ -474,23 +459,14 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                         location.getLongitude() +
                         "] (accuracy =  " +
                         location.getAccuracy() +
-                        "accepted as new periodic location.\n");
+                        ") accepted as new periodic location.\n");
             }
 
-            /*Toast.makeText(this, "periodic location: " +
-                            String.format(Locale.getDefault(),
-                                    "%7.5f",
-                                    location.getLatitude()) +
-                            ", " +
-                            String.format(Locale.getDefault(),
-                                    "%7.5f",
-                                    location.getLongitude()),
-                    Toast.LENGTH_SHORT).show();*/
         } else {
             requestGPSUpdatePeriodic(locationManagerPeriodic, locationListenerPeriodic);
 
             if (logging) {
-                writeLog(getCurrentTime() +
+                writeLog(getCurrentDateTime() +
                         ": " +
                         "Location [" +
                         location.getLatitude() +
@@ -521,66 +497,45 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
 
         // not enough locations yet - add new location to pseudo-cluster
         if (constantLocationCount < INITIAL_LOCATION_COUNT) {
-            pseudoCluster.add(location);
+            pseudoClusterList.add(location);
             textViewDistance.setText(getString(R.string.not_enough_locations));
 
             if(logging) {
-                writeLog(getCurrentTime() +
+                writeLog(getCurrentDateTime() +
                         ": " +
                         "Location [" +
                         location.getLatitude() +
                         ", " +
                         location.getLongitude() +
                         "] added to cluster, new largest cluster mean = [" +
-                        pseudoCluster.getLargestCluster().getMeanLocation().getLatitude() +
+                        pseudoClusterList.getLargestCluster().getMeanLocation().getLatitude() +
                         ", " +
-                        pseudoCluster.getLargestCluster().getMeanLocation().getLongitude() +
+                        pseudoClusterList.getLargestCluster().getMeanLocation().getLongitude() +
                         "].\n");
             }
-
-            /*Toast.makeText(this,
-                    "current mean = " +
-                            String.format(Locale.getDefault(),
-                                    "%7.5f",
-                                    pseudoCluster.getLargestCluster().getMeanLocation().getLatitude()) +
-                            " " +
-                            String.format(Locale.getDefault(),
-                                    "%7.5f",
-                                    pseudoCluster.getLargestCluster().getMeanLocation().getLongitude())
-                    , Toast.LENGTH_SHORT).show();*/
         }
 
         // enough locations - get largest pseudo-cluster and use it for the IQR method algorithm
         // in the future
         else if (constantLocationCount == INITIAL_LOCATION_COUNT) {
-            pseudoCluster.add(location);
-            constantLocationBuffer = pseudoCluster.getLargestCluster().getLocations();
+            pseudoClusterList.add(location);
+            constantLocationBuffer = pseudoClusterList.getLargestCluster().getLocations();
             textViewDistance.setText(getString(R.string.not_enough_locations));
 
             if(logging) {
-                writeLog(getCurrentTime() +
+                writeLog(getCurrentDateTime() +
                         ": " +
                         "Location [" +
                         location.getLatitude() +
                         ", " +
                         location.getLongitude() +
                         "] added to cluster, getting largest cluster (mean = [" +
-                        pseudoCluster.getLargestCluster().getMeanLocation().getLatitude() +
+                        pseudoClusterList.getLargestCluster().getMeanLocation().getLatitude() +
                         ", " +
-                        pseudoCluster.getLargestCluster().getMeanLocation().getLongitude() +
+                        pseudoClusterList.getLargestCluster().getMeanLocation().getLongitude() +
                         "]).\n");
             }
 
-           /* Toast.makeText(this,
-                    "current mean = " +
-                            String.format(Locale.getDefault(),
-                                    "%7.5f",
-                                    pseudoCluster.getLargestCluster().getMeanLocation().getLatitude()) +
-                            " " +
-                            String.format(Locale.getDefault(),
-                                    "%7.5f",
-                                    pseudoCluster.getLargestCluster().getMeanLocation().getLongitude())
-                    , Toast.LENGTH_SHORT).show();*/
         }
 
         // more locations - the pseudo-cluster has already been used - use the IQR method algorithm
@@ -589,7 +544,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             constantLocationBuffer.add(location);
 
             if(logging) {
-                writeLog(getCurrentTime() +
+                writeLog(getCurrentDateTime() +
                         ": " +
                         "Location [" +
                         location.getLatitude() +
@@ -604,17 +559,21 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
 
                 if (constantLocationBuffer.size() > 0 && constantLocationBuffer.contains(location)) {
                     // update distance
-                    if(logging) {
-                        writeLog(getCurrentTime() +
-                                ": " +
-                                "Updating distance.\n");
-                    }
+
                     if (currentDistance == 0) {
                         // distance of the entire list
                         currentDistance = locationListDistance(constantLocationBuffer);
                     } else {
                         // distance from last saved location to the current one
                         currentDistance += locationDistance(lastLocationConstant, location);
+                    }
+
+                    if(logging) {
+                        writeLog(getCurrentDateTime() +
+                                ": " +
+                                "Updating distance - new value: " +
+                                String.valueOf(currentDistance) +
+                                ".\n");
                     }
 
                     // make room in the buffer - remove oldest location
@@ -632,7 +591,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                     if (!activityReceiverActive) {
                         registerActivityReceiver();
                         if(logging) {
-                            writeLog(getCurrentTime() + ": " + "Activity receiver registered.\n");
+                            writeLog(getCurrentDateTime() + ": " + "Activity receiver registered.\n");
                         }
                     }
 
@@ -737,6 +696,8 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             btnSendNote.setEnabled(false);
             btnStartDay.setText(getString(R.string.start_day));
 
+            initDatabaseHandler();
+
             countDownTimer.cancel();
 
             lastLocationPeriodic = null;
@@ -746,7 +707,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             locationManagerConstant.removeUpdates(locationListenerConstant);
 
             if(logging) {
-                writeLog(getCurrentTime() + ": Tracking = OFF (day stopped).\n");
+                writeLog(getCurrentDateTime() + ": Tracking = OFF (day stopped).\n");
             }
 
             mApiClient.disconnect();
@@ -761,7 +722,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             currentDistance = 0;
 
             constantLocationCount = 0;
-            pseudoCluster = new PseudoCluster(DISTANCE_THRESHOLD);
+            pseudoClusterList = new PseudoClusterList(DISTANCE_THRESHOLD);
 
             constantLocationBuffer = new ArrayList<>();
 
@@ -773,7 +734,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                     REFRESH_DISTANCE);
 
             if(logging) {
-                writeLog(getCurrentTime() + ": Tracking = ON (day started).\n");
+                writeLog(getCurrentDateTime() + ": Tracking = ON (day started).\n");
             }
 
             mApiClient.connect();
@@ -803,6 +764,9 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                     "Successfully inserted: " +
                             note.toString(),
                     Toast.LENGTH_SHORT).show();
+
+            // place marker on map
+            setMarker(note);
         }
         else {
             Toast.makeText(this,
@@ -814,8 +778,6 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
         // display data
         textViewDB.setText(dbHandler.databaseToString());
 
-        // place marker on map
-        setMarker(note);
     }
 
 
@@ -850,7 +812,10 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
      */
     public static void writeLog(String data) {
         if(isExternalStorageWritable()) {
-            File file = new File(Environment.getExternalStorageDirectory(), LOG_FILENAME);
+            String filename = LOG_FILENAME +
+                    getCurrentDateTime().split(" ")[0] +
+                    LOG_EXTENSION;
+            File file = new File(Environment.getExternalStorageDirectory(), filename);
 
             if(!file.exists()) {
                 try {
@@ -871,7 +836,11 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
     }
 
 
-    public static String getCurrentTime() {
+    /**
+     * Gets the current date and time, formats them and returns them as string.
+     * @return the current date and time as string.
+     */
+    public static String getCurrentDateTime() {
         Calendar c = Calendar.getInstance();
         SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
         return(df.format(c.getTime()));
