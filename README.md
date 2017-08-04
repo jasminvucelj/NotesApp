@@ -37,7 +37,7 @@ This algorithm is based on descriptive statistics, depending on the interquartil
 
 * Q3 + IQR_COEF * IQR (the upper boundary)
 
-where Q1 and Q3 are the 1st and 3rd quartiles of the buffer dataset, IQR is the interquartile range, calculated as the difference Q3-Q1, and IQR_COEF is a constant defined as 1.5. Locations with at least one coordinate outside the defined range are considered outliers and are removed from the buffer, not considered in the total distance calculations.
+where Q1 and Q3 are the 1st and 3rd quartiles of the buffer dataset, IQR is the interquartile range, calculated as the difference Q3-Q1, and IQR_COEF is a constant with a value defined as 1.5. Locations with at least one coordinate outside the defined range are considered outliers and are removed from the buffer, not considered in the total distance calculations.
 
 ## Storing notes to a database
 
@@ -48,5 +48,11 @@ A Note is a class containing some data (String inputted through an EditText), wi
 Once a Note has been added to the database, a marker for it is added to the GoogleMap, at the coordinates specified in the note. A GoogleMap can be added to the layout as a MapFragment inside a FrameLayout. It also requires an API key (can be obtained from the Google API Console) to be added as metadata in the AndroidManifest file, and a dependency on Google Play Services to be specified in the module's build.gradle file. Finally, the Main Activity should implement the OnMapReadyCallback interface, by overriding the OnMapReady method, which will supply the activity with a GoogleMap as soon as it's ready. Once it's ready, and the Location is converted to a LatLng format the map requires, adding a marker on the coordinates with the text of the note, as well as changing the camera position and zoom, should be a straightforward matter.
 
 ## User activity recognition
+
+Google's Activity Recognition API can be used to detect a user's activity (walking, running, in a vehicle, standing still etc.) and have the app adapt accordingly. In this case, it is used to check if the user is currently standing still, and disable the constant GPS tracking if that's the case. That way the low power sensors used for activity recognition can help reduce the power consumption of listening for GPS updates every couple of seconds.
+
+Activity recognition requires a member variable of type GoogleApiClient in the main activity for Google Play Services integration, and will require that activity to implement the GoogleApiClient.ConnectionCallbacks and GoogleApiClient.OnConnectionFailedListener. Once the GoogleApiClient is connected, activity updates can be requested with a certain period, similar to how GPS location updates are requested. Detection of user activity and the sending of that data to the main activity is handled in a special ActivityRecognitionService service, which detects the most probable activity and sends its type and the confidence with which it was detected to the main activity via a LocalBroadcastManager broadcast. Once the data is received in a BroadcastReceiver in the main activity, the constant GPS tracking can be turned on and off based on the type and confidence of the detected activity; if the user is standing still with a confidence higher than a selected threshold, tracking is turned off (as neccessary), else it's turned on.
+
+## Logging app activity
 
 TODO
