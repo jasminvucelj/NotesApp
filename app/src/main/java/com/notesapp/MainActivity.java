@@ -124,7 +124,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             int confidence = intent.getIntExtra("confidence", 0);
 
             if(MainActivity.logging) {
-                MainActivity.writeLog(MainActivity.getCurrentDateTime() +
+                MainActivity.writeLog(MainActivity.getCurrentDateTime().split("_")[1] +
                         ": " +
                         "Most probable activity: " +
                         activityNames.get(type, "") +
@@ -143,7 +143,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                     locationManagerConstant.removeUpdates(locationListenerConstant);
 
                     if(logging) {
-                        writeLog(getCurrentDateTime() + ": Tracking = OFF.\n");
+                        writeLog(getCurrentDateTime().split("_")[1] + ": Tracking = OFF.\n");
                     }
                 }
             }
@@ -159,7 +159,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                             REFRESH_DISTANCE);
 
                     if(logging) {
-                        writeLog(getCurrentDateTime() + ": Tracking = ON.\n");
+                        writeLog(getCurrentDateTime().split("_")[1] + ": Tracking = ON.\n");
                     }
                 }
             }
@@ -462,7 +462,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             countDownTimer.start();
 
             if (logging) {
-                writeLog(getCurrentDateTime() +
+                writeLog(getCurrentDateTime().split("_")[1] +
                         ": " +
                         "Location [" +
                         location.getLatitude() +
@@ -477,7 +477,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             requestGPSUpdatePeriodic(locationManagerPeriodic, locationListenerPeriodic);
 
             if (logging) {
-                writeLog(getCurrentDateTime() +
+                writeLog(getCurrentDateTime().split("_")[1] +
                         ": " +
                         "Location [" +
                         location.getLatitude() +
@@ -499,7 +499,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
      */
     private void constantLocationChanged(Location location) {
         if(logging) {
-            writeLog(getCurrentDateTime() +
+            writeLog(getCurrentDateTime().split("_")[1] +
                     ": " +
                     "Received location [" +
                     location.getLatitude() +
@@ -524,7 +524,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             textViewDistance.setText(getString(R.string.not_enough_locations));
 
             if(logging) {
-                writeLog(getCurrentDateTime() +
+                writeLog(getCurrentDateTime().split("_")[1] +
                         ": " +
                         "Location [" +
                         location.getLatitude() +
@@ -546,7 +546,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             textViewDistance.setText(getString(R.string.not_enough_locations));
 
             if(logging) {
-                writeLog(getCurrentDateTime() +
+                writeLog(getCurrentDateTime().split("_")[1] +
                         ": " +
                         "Location [" +
                         location.getLatitude() +
@@ -567,7 +567,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             constantLocationBuffer.add(location);
 
             if(logging) {
-                writeLog(getCurrentDateTime() +
+                writeLog(getCurrentDateTime().split("_")[1] +
                         ": " +
                         "Location [" +
                         location.getLatitude() +
@@ -592,7 +592,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                     }
 
                     if(logging) {
-                        writeLog(getCurrentDateTime() +
+                        writeLog(getCurrentDateTime().split("_")[1] +
                                 ": " +
                                 "Updating distance - new value: " +
                                 String.valueOf(currentDistance) +
@@ -614,7 +614,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                     if (!activityReceiverActive) {
                         registerActivityReceiver();
                         if(logging) {
-                            writeLog(getCurrentDateTime() + ": " + "Activity receiver registered.\n");
+                            writeLog(getCurrentDateTime().split("_")[1] + ": " + "Activity receiver registered.\n");
                         }
                     }
 
@@ -628,7 +628,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                             Toast.LENGTH_SHORT).show();
 
                     if(logging) {
-                        writeLog(getCurrentDateTime() +
+                        writeLog(getCurrentDateTime().split("_")[1] +
                                 "Location rejected: " +
                                 location.getLatitude() +
                                 ", " +
@@ -739,7 +739,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             locationManagerConstant.removeUpdates(locationListenerConstant);
 
             if(logging) {
-                writeLog(getCurrentDateTime() + ": Tracking = OFF (day stopped).\n");
+                writeLog(getCurrentDateTime().split("_")[1] + ": Tracking = OFF (day stopped).\n");
             }
 
             mApiClient.disconnect();
@@ -766,7 +766,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                     REFRESH_DISTANCE);
 
             if(logging) {
-                writeLog(getCurrentDateTime() + ": Tracking = ON (day started).\n");
+                writeLog(getCurrentDateTime().split("_")[1] + ": Tracking = ON (day started).\n");
             }
 
             mApiClient.connect();
