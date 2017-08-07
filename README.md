@@ -55,4 +55,4 @@ Activity recognition requires a member variable of type GoogleApiClient in the m
 
 ## Logging app activity
 
-TODO
+The app logs some of its activity to a file on the external storage (world-readable and editable outside the app). The events logged are start and stop of tracking, receiving an activity from the recognition service, receiving a GPS location fix, accepting or rejecting a location, adding a location to a pseudo-cluster or an IQR algorithm buffer., and distance updates. Each line in the log is also timestamped. The method for writing to a file first checks if external storage is available for writing, and then either creates a log file with the desired text, or appends to an already existing one.
