@@ -26,6 +26,11 @@ public class ActivityRecognitionService extends IntentService {
     }
 
 
+    /**
+     * Extracts the most probable recognized activity from the received intent, and broadcasts its
+     * type and confidence to the main activity.
+     * @param result ActivityRecognitionResult extracted from the received intent
+     */
     private void sendToMainActivity(ActivityRecognitionResult result) {
         DetectedActivity mostProbableActivity = result.getMostProbableActivity();
         int type = mostProbableActivity.getType();
