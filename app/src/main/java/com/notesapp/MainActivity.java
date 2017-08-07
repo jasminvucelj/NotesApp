@@ -52,18 +52,28 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
         GoogleApiClient.ConnectionCallbacks,
         GoogleApiClient.OnConnectionFailedListener {
 
+    // parameters for receiving location updates
     final int LONG_REFRESH_TIME = 5 * 60 * 1000; // 5 min => ms
-    final int SHORT_REFRESH_TIME = 15 * 1000; // 15 s => ms
-    final int REFRESH_DISTANCE = 0; //100
-    final int OUTLIER_BUFFER_SIZE = 10; //
+    final int SHORT_REFRESH_TIME = 6 * 1000; // 15 s => ms
+    final int REFRESH_DISTANCE = 0; // 100
+    // number of locations in the buffer (for IQR algorithm) and number of initial locations (for
+    // which the pseudo-clustering algorithm will be used)
+    final int OUTLIER_BUFFER_SIZE = 4; // 10
     final int INITIAL_LOCATION_COUNT = OUTLIER_BUFFER_SIZE - 1;
+    // countdown timer tick interval
     final int TIMER_INTERVAL = 5 * 1000;
-    final int ACTIVITY_REFRESH_TIME = 5 * 1000;
+    // refresh time for activity recognition
+    final int ACTIVITY_REFRESH_TIME = 6 * 1000; // 5s
+    // threshold of activity confidence for activity recognition
     final int CONFIDENCE_THRESHOLD = 75;
+    // zoom for GoogleMap
     final float ZOOM_LEVEL = 10;
+    // threshold of desired location accuracy
     final float ACCURACY_THRESHOLD = 100;
+    // for pseudo-clustering
     final double DISTANCE_THRESHOLD = 100 * SHORT_REFRESH_TIME / 1000; // m
 
+    // filename for logging
     static final String LOG_FILENAME = "log_";
     static final String LOG_EXTENSION = ".txt";
 
@@ -78,6 +88,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
     GoogleMap googleMap;
     MapFragment mapFragment;
 
+    // layout elements
     Button btnStartDay, btnSendNote;
     EditText noteText;
     TextView textViewDistance, textViewDB;
@@ -88,7 +99,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
 
     PseudoClusterList pseudoClusterList;
 
-    List<Location> constantLocationBuffer = new ArrayList<>(); // init??????????????????????????????
+    List<Location> constantLocationBuffer = new ArrayList<>();
 
     Location lastLocationPeriodic = null, lastLocationConstant = null;
     LocationManager locationManagerConstant;
@@ -487,13 +498,25 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
      * @param location last received constant location.
      */
     private void constantLocationChanged(Location location) {
+        if(logging) {
+            writeLog(getCurrentDateTime() +
+                    ": " +
+                    "Received location [" +
+                    location.getLatitude() +
+                    ", " +
+                    location.getLongitude() +
+                    "].\n");
+        }
+
         // no need to count all locations, only to know if enough have been received yet or not
         if (constantLocationCount < INITIAL_LOCATION_COUNT + 1) {
             constantLocationCount++;
-            // Toast.makeText(this, String.valueOf(constantLocationCount), Toast.LENGTH_SHORT).show();
+//            Toast.makeText(this,
+//                    String.valueOf(constantLocationCount),
+//                    Toast.LENGTH_SHORT).show();
         }
 
-        // Toast.makeText(this, String.valueOf(constantLocationCount), Toast.LENGTH_SHORT).show();
+        ////////////////////////////////////////////////////////////////////////////////////////////
 
         // not enough locations yet - add new location to pseudo-cluster
         if (constantLocationCount < INITIAL_LOCATION_COUNT) {
@@ -603,6 +626,15 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                                     ", " +
                                     location.getLongitude(),
                             Toast.LENGTH_SHORT).show();
+
+                    if(logging) {
+                        writeLog(getCurrentDateTime() +
+                                "Location rejected: " +
+                                location.getLatitude() +
+                                ", " +
+                                location.getLongitude() +
+                                "].\n");
+                    }
                 }
             } else if (currentDistance == 0) {
                 textViewDistance.setText(getString(R.string.not_enough_locations));
@@ -813,8 +845,9 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
     public static void writeLog(String data) {
         if(isExternalStorageWritable()) {
             String filename = LOG_FILENAME +
-                    getCurrentDateTime().split(" ")[0] +
+                    getCurrentDateTime().split("_")[0] +
                     LOG_EXTENSION;
+
             File file = new File(Environment.getExternalStorageDirectory(), filename);
 
             if(!file.exists()) {
@@ -842,7 +875,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
      */
     public static String getCurrentDateTime() {
         Calendar c = Calendar.getInstance();
-        SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss");
         return(df.format(c.getTime()));
     }
 
