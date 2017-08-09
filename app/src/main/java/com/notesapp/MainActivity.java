@@ -18,13 +18,9 @@ import java.util.List;
 import java.util.Locale;
 
 import android.location.Location;
-import android.location.LocationListener;
-import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.CountDownTimer;
 import android.os.Environment;
-import android.provider.Settings;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v4.app.ActivityCompat;
@@ -40,6 +36,11 @@ import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
 import com.google.android.gms.location.ActivityRecognition;
 import com.google.android.gms.location.DetectedActivity;
+import com.google.android.gms.location.FusedLocationProviderClient;
+import com.google.android.gms.location.LocationCallback;
+import com.google.android.gms.location.LocationRequest;
+import com.google.android.gms.location.LocationResult;
+import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.MapFragment;
@@ -53,15 +54,12 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
         GoogleApiClient.OnConnectionFailedListener {
 
     // parameters for receiving location updates
-    final int LONG_REFRESH_TIME = 6 * 1000; // 5 min => ms
-    final int SHORT_REFRESH_TIME = 6 * 1000; // 15 s => ms
-    final int REFRESH_DISTANCE = 0; // 100
+    final int LONG_REFRESH_TIME = 5 * 60 * 1000; // 5 min => ms
+    final int SHORT_REFRESH_TIME = 15 * 1000; // 15 s => ms
     // number of locations in the buffer (for IQR algorithm) and number of initial locations (for
     // which the pseudo-clustering algorithm will be used)
     final int OUTLIER_BUFFER_SIZE = 4; // 10
     final int INITIAL_LOCATION_COUNT = OUTLIER_BUFFER_SIZE - 1;
-    // countdown timer tick interval
-    final int TIMER_INTERVAL = 5 * 1000;
     // refresh time for activity recognition
     final int ACTIVITY_REFRESH_TIME = 6 * 1000; // 5s
     // threshold of activity confidence for activity recognition
@@ -73,27 +71,25 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
     // for pseudo-clustering
     final double DISTANCE_THRESHOLD = 100 * SHORT_REFRESH_TIME / 1000; // m
 
+    static boolean logging = true;
+
     // filename for logging
     static final String LOG_FILENAME = "log_";
     static final String LOG_EXTENSION = ".txt";
 
-    int constantLocationCount;
-    static long nextUpdateTime;
-    double currentDistance = 0;
-
-    DatabaseHandler dbHandler = null;
-
-    CountDownTimer countDownTimer;
-
     GoogleMap googleMap;
     MapFragment mapFragment;
 
-    // layout elements
     Button btnStartDay, btnSendNote;
     EditText noteText;
     TextView textViewDistance, textViewDB;
 
-    static boolean logging = true;
+    int constantLocationCount;
+
+    double currentDistance = 0;
+
+    DatabaseHandler dbHandler = null;
+
 
     boolean dayStarted = false,
             trackingEnabled = false,
@@ -105,14 +101,16 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
     List<Location> constantLocationBuffer = new ArrayList<>();
 
     Location lastLocationPeriodic = null, lastLocationConstant = null;
-    LocationManager locationManagerConstant;
-    LocationManager locationManagerPeriodic;
-    LocationListener locationListenerConstant;
-    LocationListener locationListenerPeriodic;
 
-    GoogleApiClient mApiClient;
+    // for location fixes
+    FusedLocationProviderClient fusedLocationClientConstant, fusedLocationClientPeriodic;
+    LocationRequest locationRequestConstant, locationRequestPeriodic;
+    LocationCallback locationCallbackConstant, locationCallbackPeriodic;
 
-    // for logging
+    // api client for activity recognition
+    GoogleApiClient ActivityRecognitionClient;
+
+    // names of detectable activities - for logging
     SparseArray<String> activityNames;
 
 
@@ -143,7 +141,8 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             if(type == DetectedActivity.STILL && confidence >= CONFIDENCE_THRESHOLD) {
                 if (trackingEnabled) {
                     trackingEnabled = false;
-                    locationManagerConstant.removeUpdates(locationListenerConstant);
+
+                    stopLocationUpdates(fusedLocationClientConstant, locationCallbackConstant);
 
                     if(logging) {
                         writeLog(getCurrentDateTime().split("_")[1] + ": Tracking = OFF.\n");
@@ -156,10 +155,10 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             else {
                 if (!trackingEnabled) {
                     trackingEnabled = true;
-                    requestGPSUpdateConstant(locationManagerConstant,
-                            locationListenerConstant,
-                            SHORT_REFRESH_TIME,
-                            REFRESH_DISTANCE);
+
+                    startLocationUpdates(fusedLocationClientConstant,
+                            locationRequestConstant,
+                            locationCallbackConstant);
 
                     if(logging) {
                         writeLog(getCurrentDateTime().split("_")[1] + ": Tracking = ON.\n");
@@ -176,11 +175,38 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        initMap();
-        initViews();
-        initDatabaseHandler();
-        initActivityRecognition();
-        initSparseArray();
+        btnStartDay = (Button) findViewById(R.id.btnStartDay);
+        btnSendNote = (Button) findViewById(R.id.btnSendNote);
+        noteText = (EditText) findViewById(R.id.noteText);
+        textViewDB = (TextView) findViewById(R.id.textViewDB);
+        textViewDistance = (TextView) findViewById(R.id.textViewDistance);
+
+        // init map fragment
+        mapFragment = (MapFragment) getFragmentManager()
+                .findFragmentById(R.id.mapFragment);
+        mapFragment.getMapAsync(this);
+
+        // init DB handler
+        dbHandler = new DatabaseHandler(this);
+        dbHandler.deleteAll();
+
+        // init activity recognition client
+        ActivityRecognitionClient = new GoogleApiClient.Builder(this)
+                .addApi(ActivityRecognition.API)
+                .addConnectionCallbacks(this)
+                .addOnConnectionFailedListener(this)
+                .build();
+
+        // init sparse array - maps activity values to their names
+        activityNames = new SparseArray<>();
+        activityNames.append(0, "IN_VEHICLE");
+        activityNames.append(1, "ON_BICYCLE");
+        activityNames.append(2, "ON_FOOT");
+        activityNames.append(8, "RUNNING");
+        activityNames.append(3, "STILL");
+        activityNames.append(5, "TILTING");
+        activityNames.append(4, "UNKNOWN");
+        activityNames.append(7, "WALKING");
 
 
         // ask permissions
@@ -197,12 +223,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             return;
         }
 
-        initCountDownTimer();
-        initLocations();
-        initButtons();
-
-        requestGPSUpdatePeriodic(locationManagerPeriodic,
-                locationListenerPeriodic);
+        initWithPermissions();
     }
 
 
@@ -243,12 +264,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                                            @NonNull int[] grantResults) {
         switch (requestCode){
             case 10:
-                initCountDownTimer();
-                initLocations();
-                initButtons();
-
-                requestGPSUpdatePeriodic(locationManagerPeriodic,
-                        locationListenerPeriodic);
+                initWithPermissions();
                 break;
             default:
                 break;
@@ -269,7 +285,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
                 0,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT);
-        ActivityRecognition.ActivityRecognitionApi.requestActivityUpdates(mApiClient,
+        ActivityRecognition.ActivityRecognitionApi.requestActivityUpdates(ActivityRecognitionClient,
                 ACTIVITY_REFRESH_TIME,
                 pendingIntent);
     }
@@ -289,135 +305,68 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
 
     @Override
     protected void onDestroy() {
-        //locationManagerPeriodic.removeUpdates(locationListenerPeriodic);
         stopActivityUpdates();
         super.onDestroy();
     }
 
-
     /**
-     * Initializes the map fragment.
+     * Parts of the initialization which require user permission for locations: receiving location
+     * fixes and button functionalities.
      */
-    private void initMap() {
-        mapFragment = (MapFragment) getFragmentManager()
-                .findFragmentById(R.id.mapFragment);
-        mapFragment.getMapAsync(this);
-    }
+    private void initWithPermissions() {
+        // set up client/request/callback (constant tracking)
+        fusedLocationClientConstant = LocationServices.getFusedLocationProviderClient(this);
 
-
-    /**
-     * Assigns views on the layout to variables.
-     */
-    private void initViews() {
-        btnStartDay = (Button) findViewById(R.id.btnStartDay);
-        btnSendNote = (Button) findViewById(R.id.btnSendNote);
-        noteText = (EditText) findViewById(R.id.noteText);
-        textViewDB = (TextView) findViewById(R.id.textViewDB);
-        textViewDistance = (TextView) findViewById(R.id.textViewDistance);
-    }
-
-
-    /**
-     * Initializes the DatabaseHandler.
-     */
-    private void initDatabaseHandler() {
-        dbHandler = new DatabaseHandler(this);
-        dbHandler.deleteAll();
-    }
-
-
-    /**
-     * Initializes the API client for activity recognition.
-     */
-    private void initActivityRecognition() {
-        mApiClient = new GoogleApiClient.Builder(this)
-                .addApi(ActivityRecognition.API)
-                .addConnectionCallbacks(this)
-                .addOnConnectionFailedListener(this)
-                .build();
-    }
-
-
-    /**
-     * Initializes the sparse array that maps the activity values to their names.
-     */
-    private void initSparseArray() {
-        activityNames = new SparseArray<>();
-        activityNames.append(0, "IN_VEHICLE");
-        activityNames.append(1, "ON_BICYCLE");
-        activityNames.append(2, "ON_FOOT");
-        activityNames.append(8, "RUNNING");
-        activityNames.append(3, "STILL");
-        activityNames.append(5, "TILTING");
-        activityNames.append(4, "UNKNOWN");
-        activityNames.append(7, "WALKING");
-    }
-
-
-    /**
-     * Sets up the countdown timer.
-     */
-    private void initCountDownTimer() {
-        countDownTimer = new CountDownTimer(LONG_REFRESH_TIME, TIMER_INTERVAL) {
+        locationCallbackConstant = new LocationCallback() {
             @Override
-            public void onTick(long millisUntilFinished) {
-                if (Calendar.getInstance().getTimeInMillis() > nextUpdateTime) { // time changed => request update
-                    requestGPSUpdatePeriodic(locationManagerPeriodic, locationListenerPeriodic);
-                }
-            }
-
-            @Override
-            public void onFinish() { // timer expires => request update
-                requestGPSUpdatePeriodic(locationManagerPeriodic, locationListenerPeriodic);
-            }
-        };
-    };
-
-
-    /**
-     * Sets up the locationManagers and locationListeners.
-     */
-    private void initLocations() {
-
-        locationManagerPeriodic = (LocationManager) getSystemService(LOCATION_SERVICE);
-
-        locationListenerPeriodic = new LocationListener() {
-            @Override
-            public void onLocationChanged(Location location) {
-                periodicLocationChanged(location);
-            }
-
-            @Override
-            public void onStatusChanged(String provider, int status, Bundle extras) {}
-
-            @Override
-            public void onProviderEnabled(String provider) {}
-
-            @Override
-            public void onProviderDisabled(String provider) {
-                startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS));
+            public void onLocationResult(LocationResult locationResult) {
+                super.onLocationResult(locationResult);
+                constantLocationChanged(locationResult.getLastLocation());
             }
         };
 
-        locationManagerConstant = (LocationManager) getSystemService(LOCATION_SERVICE);
+        locationRequestConstant = new LocationRequest();
+        locationRequestConstant.setInterval(LONG_REFRESH_TIME);
+        locationRequestConstant.setFastestInterval(SHORT_REFRESH_TIME);
+        locationRequestConstant.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
 
-        locationListenerConstant = new LocationListener() {
-            @Override
-            public void onLocationChanged(Location location) {
-                constantLocationChanged(location);
-            }
+        // set up client/request/callback (periodic tracking)
+        fusedLocationClientPeriodic = LocationServices.getFusedLocationProviderClient(this);
 
+        locationCallbackPeriodic = new LocationCallback() {
             @Override
-            public void onStatusChanged(String provider, int status, Bundle extras) {}
-
-            @Override
-            public void onProviderEnabled(String provider) {}
-
-            @Override
-            public void onProviderDisabled(String provider) {
-                startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS));
+            public void onLocationResult(LocationResult locationResult) {
+                super.onLocationResult(locationResult);
+                periodicLocationChanged(locationResult.getLastLocation());
             }
         };
+
+        locationRequestPeriodic = new LocationRequest();
+        locationRequestPeriodic.setInterval(LONG_REFRESH_TIME);
+        locationRequestPeriodic.setFastestInterval(SHORT_REFRESH_TIME);
+        locationRequestPeriodic.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
+
+        // request periodic updates
+        startLocationUpdates(fusedLocationClientPeriodic,
+                locationRequestPeriodic,
+                locationCallbackPeriodic);
+
+
+        // btnStartDay - toggle tracking
+        btnStartDay.setOnClickListener(new View.OnClickListener(){
+            @Override
+            public void onClick(View v){
+                dayStartedToggle();
+            }
+        });
+
+        // btnSendNote - sends (saves to db) note with the last periodic location
+        btnSendNote.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                sendNote(noteText.getText().toString(), lastLocationPeriodic);
+            }
+        });
     }
 
 
@@ -434,7 +383,7 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
     /**
      * Unregisters the receiver for updates from {@link ActivityRecognitionService}.
      */
-    private void unregisterReceiver() {
+    private void unregisterActivityReceiver() {
         activityReceiverActive = false;
         LocalBroadcastManager.getInstance(MainActivity.this).unregisterReceiver(activityReceiver);
     }
@@ -444,47 +393,41 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
      * Stops activity recognition updates.
      */
     private void stopActivityUpdates() {
-        if (mApiClient.isConnected()) {
+        if (ActivityRecognitionClient.isConnected()) {
             Intent intent = new Intent(this, ActivityRecognitionService.class);
             PendingIntent pendingIntent = PendingIntent.getService(this,
                     0,
                     intent,
                     PendingIntent.FLAG_UPDATE_CURRENT);
-            ActivityRecognition.ActivityRecognitionApi.removeActivityUpdates(mApiClient, pendingIntent);
+            ActivityRecognition.ActivityRecognitionApi.removeActivityUpdates(ActivityRecognitionClient, pendingIntent);
         }
     }
 
 
     /**
-     * Requests a single GPS update.
-     * @param locationManager location manager
-     * @param locationListener location listener
+     * Start receiving location updates from the fused location provider.
+     * @param client the client for interaction with the fused provider.
+     * @param request the object that specifies service parameters, such as priority and interval.
+     * @param callback the object used for receiving notifications from the provider.
      */
-    static private void requestGPSUpdatePeriodic(LocationManager locationManager,
-                                                 LocationListener locationListener) {
+    static private void startLocationUpdates(FusedLocationProviderClient client,
+                                             LocationRequest request,
+                                             LocationCallback callback) {
         //noinspection MissingPermission
-        locationManager.requestSingleUpdate(LocationManager.GPS_PROVIDER,
-                locationListener, null);
+        client.requestLocationUpdates(request,
+                callback,
+                null);
     }
 
 
     /**
-     * Requests constant GPS updates with a given refresh time/distance.
-     * @param locationManager location manager
-     * @param locationListener location listener
-     * @param refreshTime min time interval (ms)
-     * @param refreshDistance min distance interval (m)
+     * Stop receiving location updates from the fused location provider.
+     * @param client the client for interaction with the fused provider.
+     * @param callback the object used for receiving notifications from the provider.
      */
-    static private void requestGPSUpdateConstant(LocationManager locationManager,
-                                                 LocationListener locationListener,
-                                                 int refreshTime,
-                                                 int refreshDistance) {
-        //noinspection MissingPermission
-        locationManager.requestLocationUpdates(
-                LocationManager.GPS_PROVIDER,
-                refreshTime,
-                refreshDistance,
-                locationListener);
+    private void stopLocationUpdates(FusedLocationProviderClient client,
+                                     LocationCallback callback) {
+        client.removeLocationUpdates(callback);
     }
 
 
@@ -493,12 +436,10 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
      * @param location last received periodic location.
      */
     private void periodicLocationChanged(Location location) {
-        if (locationIsAcceptable(location)){
+        if (locationIsAcceptable(location)) {
             periodicLocationAvailable = true;
             btnSendNote.setEnabled(true);
             lastLocationPeriodic = location;
-            nextUpdateTime = Calendar.getInstance().getTimeInMillis() + LONG_REFRESH_TIME;
-            countDownTimer.start();
 
             if (logging) {
                 writeLog(getCurrentDateTime().split("_")[1] +
@@ -513,7 +454,6 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             }
 
         } else {
-            requestGPSUpdatePeriodic(locationManagerPeriodic, locationListenerPeriodic);
 
             if (logging) {
                 writeLog(getCurrentDateTime().split("_")[1] +
@@ -550,9 +490,6 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
         // no need to count all locations, only to know if enough have been received yet or not
         if (constantLocationCount < INITIAL_LOCATION_COUNT + 1) {
             constantLocationCount++;
-//            Toast.makeText(this,
-//                    String.valueOf(constantLocationCount),
-//                    Toast.LENGTH_SHORT).show();
         }
 
         ////////////////////////////////////////////////////////////////////////////////////////////
@@ -577,6 +514,8 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             }
         }
 
+        ////////////////////////////////////////////////////////////////////////////////////////////
+
         // enough locations - get largest pseudo-cluster and use it for the IQR method algorithm
         // in the future
         else if (constantLocationCount == INITIAL_LOCATION_COUNT) {
@@ -599,6 +538,8 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
             }
 
         }
+
+        ////////////////////////////////////////////////////////////////////////////////////////////
 
         // more locations - the pseudo-cluster has already been used - use the IQR method algorithm
         else {
@@ -688,14 +629,16 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
      * @param location the location to be checked.
      * @return true if location is acceptable, false if not.
      */
-    private boolean locationIsAcceptable(Location location) { // acceptable = not null & accuracy > 100 m
+    private boolean locationIsAcceptable(Location location) {
+        // acceptable = not null & accuracy > 100 m
         if (location == null || location.getAccuracy() > ACCURACY_THRESHOLD) return false;
         return true;
     }
 
 
     /**
-     * Returns the distance between two locations.
+     * Returns the distance between two locations, handling the case if either location is
+     * undefined.
      * @param loc1 first location.
      * @param loc2 second location.
      * @return 0 if either location is undefined, otherwise the distance between them.
@@ -732,82 +675,67 @@ public class MainActivity extends Activity implements OnMapReadyCallback,
 
 
     /**
-     * Sets up the onClickListeners for btnStartDay (toggle tracking) and btnSendNote
-     * (sends/saves to DB the note with the last periodic location).
-     */
-    private void initButtons() {
-        // btnStartDay - toggle tracking
-        btnStartDay.setOnClickListener(new View.OnClickListener(){
-            @Override
-            public void onClick(View v){
-                dayStartedToggle();
-            }
-        });
-
-        // btnSendNote - sends (saves to db) note with the last periodic location
-        btnSendNote.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                sendNote(noteText.getText().toString(), lastLocationPeriodic);
-            }
-        });
-    }
-
-
-    /**
-     * Toggles both constant and periodic tracking.
+     * Toggles constant tracking on/off.
      */
     private void dayStartedToggle() {
         if (dayStarted) { // turn off
             dayStarted = false;
             trackingEnabled = false;
 
-            unregisterReceiver();
-
+            // disable the send note button
             btnSendNote.setEnabled(false);
+
+            // change button text
             btnStartDay.setText(getString(R.string.start_day));
 
-            initDatabaseHandler();
-
-            countDownTimer.cancel();
-
+            // reset last locations
             lastLocationPeriodic = null;
             lastLocationConstant = null;
 
-            locationManagerConstant.removeUpdates(locationListenerConstant);
+            // unregister the activity receiver (registered in constantLocationChanged())
+            unregisterActivityReceiver();
+
+            // stop constant tracking
+            stopLocationUpdates(fusedLocationClientConstant, locationCallbackConstant);
+
+            // disconnect activity recognition client
+            ActivityRecognitionClient.disconnect();
 
             if(logging) {
                 writeLog(getCurrentDateTime().split("_")[1] + ": Tracking = OFF (day stopped).\n");
             }
-
-            mApiClient.disconnect();
         }
 
         else { // turn on
             dayStarted = true;
             trackingEnabled = true;
 
+            // change button text
             btnStartDay.setText(getString(R.string.stop_day));
 
+            // reset distance
             currentDistance = 0;
 
+            // clear database
+            dbHandler.deleteAll();
+            textViewDB.setText("");
+
+            // reset location count
             constantLocationCount = 0;
             pseudoClusterList = new PseudoClusterList(DISTANCE_THRESHOLD);
-
             constantLocationBuffer = new ArrayList<>();
 
-            // periodic updates requested in onCreate
+            // start constant tracking (periodic updates requested in onCreate())
+            startLocationUpdates(fusedLocationClientConstant,
+                    locationRequestConstant,
+                    locationCallbackConstant);
 
-            requestGPSUpdateConstant(locationManagerConstant,
-                    locationListenerConstant,
-                    SHORT_REFRESH_TIME,
-                    REFRESH_DISTANCE);
+            // connect activity recognition client
+            ActivityRecognitionClient.connect();
 
             if(logging) {
                 writeLog(getCurrentDateTime().split("_")[1] + ": Tracking = ON (day started).\n");
             }
-
-            mApiClient.connect();
         }
     }
 
